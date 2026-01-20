@@ -35,7 +35,7 @@
         #alert-overlay { position:absolute; top:10px; right:10px; width:280px; z-index:50; pointer-events:none; }
         .toast { background:rgba(0,0,0,0.9); border-left:3px solid var(--danger); padding:8px 12px; margin-bottom:4px; font-size:10px; color:#fff; pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,0.5); transform:translateX(100%); animation:slideIn 0.3s forwards; }
         @keyframes slideIn { to { transform:translateX(0); } }
-        #chart-container { position:relative; height:140px; width:100%; }
+        #chart-container { position:relative; height:180px; width:100%; }
     </style>
 </head>
 <body>
@@ -48,20 +48,26 @@
         <div id="connection-status" class="status-pill">CONNECTING...</div>
     </div>
     <div id="tabs">
-        <div class="tab active" onclick="ui.setTab('live')">1. LIVE TELEMETRY</div>
-        <div class="tab" onclick="ui.setTab('stops')">2. STOP ANALYSIS</div>
-        <div class="tab" onclick="ui.setTab('health')">3. FLEET HEALTH</div>
-        <div class="tab" onclick="ui.setTab('operator')">4. OPERATOR</div>
-        <div class="tab" onclick="ui.setTab('driver')">5. DRIVER AI</div>
-        <div class="tab" onclick="ui.setTab('predict')">6. PREDICTIONS</div>
-        <div class="tab" onclick="ui.setTab('heatmap')">7. HEATMAP</div>
+        <div class="tab active" onclick="ui.setTab(this, 'live')">1. LIVE TELEMETRY</div>
+        <div class="tab" onclick="ui.setTab(this, 'stops')">2. STOP ANALYSIS</div>
+        <div class="tab" onclick="ui.setTab(this, 'health')">3. FLEET HEALTH</div>
+        <div class="tab" onclick="ui.setTab(this, 'operator')">4. OPERATOR</div>
+        <div class="tab" onclick="ui.setTab(this, 'driver')">5. DRIVER AI</div>
+        <div class="tab" onclick="ui.setTab(this, 'predict')">6. PREDICTIONS</div>
+        <div class="tab" onclick="ui.setTab(this, 'heatmap')">7. HEATMAP</div>
     </div>
     <div id="content-area"><div style="margin:auto;color:#444;font-size:12px;">Waiting for selection...</div></div>
 </div>
 
 <script>
 const CONFIG = { limits:{busG:0.2,trainG:0.1}, colors:{bus:'#00f0ff',train:'#ffcc00',alert:'#ff003c'} };
-const getOperatorName=line=>{if(!line)return"UNKNOWN";if(line.match(/^9/))return"NOBINA OY";if(line.match(/^[1-9]00/))return"HELSINGIN BUSSILIIKENNE";if(line.includes("Z")||line.includes("R")||line.length<=2)return"VR GROUP";return"HSL PARTNER";};
+const getOperatorName=line=>{
+    if(!line)return"UNKNOWN";
+    if(line.match(/^9/))return"NOBINA OY";
+    if(line.match(/^[1-9]00/))return"HELSINGIN BUSSILIIKENNE";
+    if(line.includes("Z")||line.includes("R")||line.length<=2)return"VR GROUP";
+    return"HSL PARTNER";
+};
 
 class Unit {
     constructor(id,type){
@@ -71,56 +77,198 @@ class Unit {
         this.healthScore=100;this.stressAccumulator=0;this.operator='DETECTING...';
         this.driverProfile={aggression:0,comfort:100,risk:0};
         this.predictions={arrival:0,delayProb:0,congestion:'UNKNOWN'};
+        this.line = "N/A";
     }
 
     update(data){
-        const now=Date.now();const dt=(now-this.ts)/1000;this.ts=now;this.prevSpeed=this.speed;this.speed=data.speed;this.line=data.line;this.operator=getOperatorName(this.line);
-        let acc=0;if(dt>0.1)acc=Math.abs(this.speed-this.prevSpeed)/dt;const g=acc/9.81;this.gHistory.push(g);this.gHistory.shift();
+        const now=Date.now();
+        const dt=(now-this.ts)/1000;
+        this.ts=now;
+        this.prevSpeed=this.speed;
+        this.speed=data.speed;
+        this.line=data.line;
+        this.operator=getOperatorName(this.line);
+        
+        let acc=0;
+        if(dt>0.1) acc=Math.abs(this.speed-this.prevSpeed)/dt;
+        const g=acc/9.81;
+        this.gHistory.push(g);
+        this.gHistory.shift();
 
-        // Stop logic
-        if(this.speed<0.2&&!this.isStopped){this.isStopped=true;this.stopStartTime=now;}
-        else if(this.speed>0.5&&this.isStopped){
-            const duration=(now-this.stopStartTime)/1000;if(duration>5)this.completedStops.push(duration);this.stressAccumulator+=0.5;this.isStopped=false;
+        if(this.speed<0.2&&!this.isStopped){
+            this.isStopped=true;
+            this.stopStartTime=now;
+        } else if(this.speed>0.5&&this.isStopped){
+            const duration=(now-this.stopStartTime)/1000;
+            if(duration>5)this.completedStops.push(duration);
+            this.stressAccumulator+=0.5;
+            this.isStopped=false;
         }
 
-        // Health
-        if(g>0.2){this.healthScore-=0.1;this.stressAccumulator+=g*2;}this.healthScore=Math.min(100,this.healthScore+0.005);
+        if(g>0.2){this.healthScore-=0.1;this.stressAccumulator+=g*2;}
+        this.healthScore=Math.min(100,this.healthScore+0.005);
 
-        // Driver AI profile
         const avgG=this.gHistory.reduce((a,b)=>a+b,0)/this.gHistory.length;
-        this.driverProfile.aggression=avgG*100;
+        this.driverProfile.aggression=avgG*150; // Scale for UI
         this.driverProfile.comfort=Math.max(0,100-this.driverProfile.aggression);
         this.driverProfile.risk=this.stressAccumulator*2;
 
-        // Predictions (simple demo)
-        this.predictions.arrival=Math.round(Math.random()*5);this.predictions.delayProb=Math.round(Math.random()*20);this.predictions.congestion=(this.completedStops.length>5)?'HIGH':'LOW';
+        this.predictions.arrival=Math.round(Math.random()*5);
+        this.predictions.delayProb=Math.round(Math.random()*20);
+        this.predictions.congestion=(this.completedStops.length>5)?'HIGH':'LOW';
 
         return {g,stopped:this.isStopped};
     }
-    getAverageStop(){if(this.completedStops.length===0)return 0;return(this.completedStops.reduce((a,b)=>a+b,0)/this.completedStops.length).toFixed(1);}
+    getAverageStop(){
+        if(this.completedStops.length===0)return 0;
+        return(this.completedStops.reduce((a,b)=>a+b,0)/this.completedStops.length).toFixed(1);
+    }
 }
 
 const app={units:new Map(),markers:new Map(),selectedId:null,chart:null,activeTab:'live'};
 const map=new maplibregl.Map({container:'map',style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',center:[24.94,60.17],zoom:11});
 
 const ui={
-    setTab:t=>{app.activeTab=t;document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active'));event.target.classList.add('active');if(app.selectedId)ui.render();},
-    updateStatus:(msg,type)=>{const el=document.getElementById('connection-status');el.innerText=msg;el.className=`status-pill status-${type}`;},
-    addAlert:msg=>{const div=document.createElement('div');div.className='toast';div.innerText=msg;document.getElementById('alert-overlay').prepend(div);setTimeout(()=>div.remove(),4000);},
+    setTab:(el, t)=>{
+        app.activeTab=t;
+        document.querySelectorAll('.tab').forEach(tab=>tab.classList.remove('active'));
+        el.classList.add('active');
+        if(app.chart) { app.chart.destroy(); app.chart = null; }
+        if(app.selectedId) ui.render();
+    },
+    updateStatus:(msg,type)=>{
+        const el=document.getElementById('connection-status');
+        if(el) { el.innerText=msg; el.className=`status-pill status-${type}`; }
+    },
+    addAlert:msg=>{
+        const div=document.createElement('div');
+        div.className='toast';
+        div.innerText=msg;
+        document.getElementById('alert-overlay').prepend(div);
+        setTimeout(()=>div.remove(),4000);
+    },
     render:()=>{
-        if(!app.selectedId)return;const unit=app.units.get(app.selectedId);if(!unit)return;const container=document.getElementById('content-area');
-        if(app.activeTab==='live'){if(!app.chart){container.innerHTML=`<div class="col" style="flex:0 0 200px"><div class="card"><h3>TARGET</h3><div class="metric"><span>ID</span><span class="val">${unit.id}</span></div><div class="metric"><span>LINE</span><span class="val">${unit.line}</span></div><div class="metric"><span>SPD</span><span class="val">${(unit.speed*3.6).toFixed(0)} km/h</span></div></div><div class="card"><h3>STATUS</h3><div class="metric"><span>G-FORCE</span><span class="val ${unit.gHistory[49]>0.2?'alert':''}">${unit.gHistory[49].toFixed(2)} G</span></div><div class="metric"><span>STATE</span><span class="val" style="color:${unit.isStopped?'#f00':'#0f0'}">${unit.isStopped?'STOPPED':'MOVING'}</span></div></div></div><div class="col"><div class="card" style="height:100%; display:flex; flex-direction:column;"><h3>LIVE G-FORCE HISTORY</h3><div id="chart-container"><canvas id="liveChart"></canvas></div></div></div>`;
-            const ctx=document.getElementById('liveChart').getContext('2d');app.chart=new Chart(ctx,{type:'line',data:{labels:Array(50).fill(''),datasets:[{data:unit.gHistory,borderColor:'#00f0ff',borderWidth:1.5,pointRadius:0,tension:0.4}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{y:{min:0,max:0.5,grid:{color:'#222'}},x:{display:false}},plugins:{legend:{display:false}}}});}else{app.chart.data.datasets[0].data=unit.gHistory;app.chart.update('none');}}
-        else if(app.activeTab==='stops'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>STOP EFFICIENCY</h3><div class="metric"><span>STOPS LOGGED</span><span class="val">${unit.completedStops.length}</span></div><div class="metric"><span>AVG DURATION</span><span class="val">${unit.getAverageStop()} s</span></div><div class="metric"><span>LAST STOP</span><span class="val">${unit.completedStops.length>0?unit.completedStops[unit.completedStops.length-1].toFixed(1)+'s':'-'}</span></div></div><div class="card"><h3>TRAFFIC ANALYSIS</h3><div class="metric"><span>FLOW</span><span class="val" style="color:${unit.completedStops.length>5?'#f00':'#0f0'}">${unit.completedStops.length>5?'CONGESTED':'FREE FLOW'}</span></div></div></div>`;}
-        else if(app.activeTab==='health'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>FLEET CONDITION</h3><div class="metric"><span>HEALTH SCORE</span><span class="val" style="color:${unit.healthScore<90?'#f00':'#0f0'}">${unit.healthScore.toFixed(1)}%</span></div><div class="metric"><span>STRESS INDEX</span><span class="val">${unit.stressAccumulator.toFixed(1)}</span></div></div></div>`;}
-        else if(app.activeTab==='operator'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>OPERATOR DATA</h3><div class="metric"><span>NAME</span><span class="val">${unit.operator}</span></div><div class="metric"><span>CONTRACTOR ID</span><span class="val">EST-${unit.line.substring(0,2)}</span></div></div></div>`;}
-        else if(app.activeTab==='driver'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>DRIVER AI</h3><div class="metric"><span>AGGRESSION</span><span class="val">${unit.driverProfile.aggression.toFixed(1)}%</span></div><div class="metric"><span>COMFORT</span><span class="val">${unit.driverProfile.comfort.toFixed(1)}%</span></div><div class="metric"><span>RISK</span><span class="val">${unit.driverProfile.risk.toFixed(0)}</span></div></div></div>`;}
-        else if(app.activeTab==='predict'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>PREDICTIONS</h3><div class="metric"><span>ARRIVAL</span><span class="val">${unit.predictions.arrival} min</span></div><div class="metric"><span>DELAY PROB</span><span class="val">${unit.predictions.delayProb}%</span></div><div class="metric"><span>CONGESTION</span><span class="val">${unit.predictions.congestion}</span></div></div></div>`;}
-        else if(app.activeTab==='heatmap'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>HEATMAP</h3><p>Real-time stop density / congestion visual here (demo)</p></div></div>`;}
+        if(!app.selectedId) return;
+        const unit=app.units.get(app.selectedId);
+        if(!unit) return;
+        const container=document.getElementById('content-area');
+        
+        if(app.activeTab==='live'){
+            if(!app.chart){
+                container.innerHTML=`
+                    <div class="col" style="flex:0 0 200px">
+                        <div class="card">
+                            <h3>TARGET</h3>
+                            <div class="metric"><span>ID</span><span class="val">${unit.id}</span></div>
+                            <div class="metric"><span>LINE</span><span class="val">${unit.line}</span></div>
+                            <div class="metric"><span>SPD</span><span class="val">${(unit.speed*3.6).toFixed(0)} km/h</span></div>
+                        </div>
+                        <div class="card">
+                            <h3>STATUS</h3>
+                            <div class="metric"><span>G-FORCE</span><span class="val ${unit.gHistory[49]>0.2?'alert':''}">${unit.gHistory[49].toFixed(2)} G</span></div>
+                            <div class="metric"><span>STATE</span><span class="val" style="color:${unit.isStopped?'#f00':'#0f0'}">${unit.isStopped?'STOPPED':'MOVING'}</span></div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card" style="height:100%; display:flex; flex-direction:column;">
+                            <h3>LIVE G-FORCE HISTORY</h3>
+                            <div id="chart-container"><canvas id="liveChart"></canvas></div>
+                        </div>
+                    </div>`;
+                const ctx=document.getElementById('liveChart').getContext('2d');
+                app.chart=new Chart(ctx,{
+                    type:'line',
+                    data:{labels:Array(50).fill(''),datasets:[{data:unit.gHistory,borderColor:'#00f0ff',borderWidth:1.5,pointRadius:0,tension:0.4}]},
+                    options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{y:{min:0,max:0.5,grid:{color:'#222'}},x:{display:false}},plugins:{legend:{display:false}}}
+                });
+            } else {
+                app.chart.data.datasets[0].data=unit.gHistory;
+                app.chart.update('none');
+                // Päivitetään tekstiarvot ilman koko HTML:n ylikirjoitusta jos mahdollista, mutta tässä pidetään simppelinä:
+                const vals = container.querySelectorAll('.val');
+                if(vals.length >= 4) {
+                    vals[2].innerText = (unit.speed*3.6).toFixed(0) + " km/h";
+                    vals[3].innerText = unit.gHistory[49].toFixed(2) + " G";
+                    vals[4].innerText = unit.isStopped ? 'STOPPED' : 'MOVING';
+                    vals[4].style.color = unit.isStopped ? '#f00' : '#0f0';
+                }
+            }
+        }
+        else if(app.activeTab==='stops'){
+            container.innerHTML=`<div class="col"><div class="card"><h3>STOP EFFICIENCY</h3><div class="metric"><span>STOPS LOGGED</span><span class="val">${unit.completedStops.length}</span></div><div class="metric"><span>AVG DURATION</span><span class="val">${unit.getAverageStop()} s</span></div><div class="metric"><span>LAST STOP</span><span class="val">${unit.completedStops.length>0?unit.completedStops[unit.completedStops.length-1].toFixed(1)+'s':'-'}</span></div></div><div class="card"><h3>TRAFFIC ANALYSIS</h3><div class="metric"><span>FLOW</span><span class="val" style="color:${unit.completedStops.length>5?'#f00':'#0f0'}">${unit.completedStops.length>5?'CONGESTED':'FREE FLOW'}</span></div></div></div>`;
+        }
+        else if(app.activeTab==='health'){
+            container.innerHTML=`<div class="col"><div class="card"><h3>FLEET CONDITION</h3><div class="metric"><span>HEALTH SCORE</span><span class="val" style="color:${unit.healthScore<90?'#f00':'#0f0'}">${unit.healthScore.toFixed(1)}%</span></div><div class="metric"><span>STRESS INDEX</span><span class="val">${unit.stressAccumulator.toFixed(1)}</span></div></div></div>`;
+        }
+        else if(app.activeTab==='operator'){
+            container.innerHTML=`<div class="col"><div class="card"><h3>OPERATOR DATA</h3><div class="metric"><span>NAME</span><span class="val">${unit.operator}</span></div><div class="metric"><span>CONTRACTOR ID</span><span class="val">EST-${unit.line.toString().substring(0,2)}</span></div></div></div>`;
+        }
+        else if(app.activeTab==='driver'){
+            container.innerHTML=`<div class="col"><div class="card"><h3>DRIVER AI</h3><div class="metric"><span>AGGRESSION</span><span class="val">${unit.driverProfile.aggression.toFixed(1)}%</span></div><div class="metric"><span>COMFORT</span><span class="val">${unit.driverProfile.comfort.toFixed(1)}%</span></div><div class="metric"><span>RISK</span><span class="val">${unit.driverProfile.risk.toFixed(0)}</span></div></div></div>`;
+        }
+        else if(app.activeTab==='predict'){
+            container.innerHTML=`<div class="col"><div class="card"><h3>PREDICTIONS</h3><div class="metric"><span>ARRIVAL</span><span class="val">${unit.predictions.arrival} min</span></div><div class="metric"><span>DELAY PROB</span><span class="val">${unit.predictions.delayProb}%</span></div><div class="metric"><span>CONGESTION</span><span class="val">${unit.predictions.congestion}</span></div></div></div>`;
+        }
+        else if(app.activeTab==='heatmap'){
+            container.innerHTML=`<div class="col"><div class="card"><h3>HEATMAP</h3><p>Real-time stop density / congestion visual here (demo)</p></div></div>`;
+        }
     }
 };
 
 const mqttClient=mqtt.connect('wss://mqtt.hsl.fi:443/');
 mqttClient.on('connect',()=>{ui.updateStatus('CONNECTED (HSL)','ok');mqttClient.subscribe('/hfp/v2/journey/ongoing/vp/bus/#');});
 mqttClient.on('error',()=>ui.updateStatus('CONNECTION ERROR','err'));
-mqttClient.on('message',(t,m)=>{try{const d=JSON.parse(m).VP;if(!d||!d.veh)return;let unit=app.units.get(d.veh);if(!unit){unit=new Unit(d.veh,'BUS');app.units.set(d.veh,unit);const el=document.createElement('div');el.style.cssText=`width:10px;height:10px;background:${CONFIG.colors.bus};border-radius:50%;border:2px solid #fff;cursor:pointer;`;el.onclick=e=>{e.stopPropagation();app.selectedId=d.veh;app.chart=null;ui.render();};app.markers.set(d.veh,new maplibregl.Marker({element:el}).setLngLat([d.long,d.lat]).addTo(map));}const res=unit.update({speed:d.spd,line:d.desi,lat:d.lat,lon:d.long});const marker=app.markers.get(d.veh);marker.setLngLat([d.long,d.lat]);if(res.g>0.2){marker.getElement().style.background=CONFIG.colors.alert;marker.getElement().style.transform=`scale(1.5)`;if(d.veh===app.selectedId)ui.addAlert(`VIOLATION: ${res.g.toFixed(2)}G`);}else{marker.getElement().style.background=CONFIG.colors.bus;marker.getElement().style.transform=`scale(1)`;}if(app.selectedId===d.veh&&app.activeTab==='live')ui.render();}catch(e){console.error
+mqttClient.on('message',(t,m)=>{
+    try{
+        const d=JSON.parse(m).VP;
+        if(!d||!d.veh)return;
+        let unit=app.units.get(d.veh);
+        if(!unit){
+            unit=new Unit(d.veh,'BUS');
+            app.units.set(d.veh,unit);
+            const el=document.createElement('div');
+            el.style.cssText=`width:10px;height:10px;background:${CONFIG.colors.bus};border-radius:50%;border:2px solid #fff;cursor:pointer;`;
+            el.onclick=e=>{
+                e.stopPropagation();
+                app.selectedId=d.veh;
+                if(app.chart) { app.chart.destroy(); app.chart = null; }
+                ui.render();
+            };
+            app.markers.set(d.veh,new maplibregl.Marker({element:el}).setLngLat([d.long,d.lat]).addTo(map));
+        }
+        const res=unit.update({speed:d.spd,line:d.desi,lat:d.lat,lon:d.long});
+        const marker=app.markers.get(d.veh);
+        if(marker) {
+            marker.setLngLat([d.long,d.lat]);
+            if(res.g>0.2){
+                marker.getElement().style.background=CONFIG.colors.alert;
+                marker.getElement().style.transform=`scale(1.5)`;
+                if(d.veh===app.selectedId)ui.addAlert(`VIOLATION: ${res.g.toFixed(2)}G`);
+            } else {
+                marker.getElement().style.background=CONFIG.colors.bus;
+                marker.getElement().style.transform=`scale(1)`;
+            }
+        }
+        if(app.selectedId===d.veh) ui.render();
+    }catch(e){console.error(e);}
+});
+
+// Siivousrutiini vanhoille merkeille
+setInterval(() => {
+    const now = Date.now();
+    app.units.forEach((unit, id) => {
+        if (now - unit.ts > 60000) {
+            const m = app.markers.get(id);
+            if(m) m.remove();
+            app.markers.delete(id);
+            app.units.delete(id);
+            if(app.selectedId === id) {
+                app.selectedId = null;
+                document.getElementById('content-area').innerHTML = '<div style="margin:auto;color:#444;font-size:12px;">Selection lost (offline)</div>';
+            }
+        }
+    });
+}, 10000);
+</script>
+</body>
+</html>
