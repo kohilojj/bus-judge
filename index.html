@@ -1,69 +1,183 @@
 <!DOCTYPE html>
-<html>
+<html lang="fi">
 <head>
-    <title>BUS_JUDGE_ULTIMATE</title>
+    <meta charset="UTF-8">
+    <title>JUDGE_OS_V8_INDUSTRIAL</title>
     <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #0f0; font-family: monospace; overflow: hidden; }
+        :root { --neon: #00f0ff; --danger: #ff003c; --bg: #020202; --yellow: #ffcc00; }
+        body { margin: 0; background: var(--bg); color: #fff; font-family: 'JetBrains Mono', monospace; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
-        #hud { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.9); padding: 20px; 
-               border: 2px solid #0f0; z-index: 10; pointer-events: none; }
-        .blink { animation: b 1s infinite; }
-        @keyframes b { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        #hud { position: absolute; top: 20px; left: 20px; width: 320px; z-index: 10; pointer-events: none; }
+        .panel { background: rgba(0,0,0,0.9); border: 1px solid rgba(0,240,255,0.2); padding: 15px; border-radius: 8px; backdrop-filter: blur(15px); margin-bottom: 10px; pointer-events: auto; }
+        h1 { margin: 0; font-size: 13px; color: var(--neon); letter-spacing: 2px; }
+        .detail { margin: 8px 0; font-size: 11px; display: flex; justify-content: space-between; border-bottom: 1px solid #111; }
+        .marker-bus { background: var(--neon); width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff; cursor: pointer; }
+        .marker-train { background: var(--yellow); width: 12px; height: 12px; border-radius: 2px; border: 1px solid #fff; cursor: pointer; }
+        .alert-entry { color: var(--danger); font-size: 9px; padding: 4px 0; border-top: 1px solid rgba(255,0,60,0.1); }
+        .status-err { color: var(--danger); font-weight: bold; }
     </style>
 </head>
 <body>
     <div id="hud">
-        <h1 class="blink">SYSTEM: JUDGE_OS_v4</h1>
-        <div id="stats">INITIALIZING_SATELLITE_LINK...</div>
+        <div class="panel">
+            <h1 id="sys-title">🛰️ JUDGE_OS // V8_INDUSTRIAL</h1>
+            <div id="unit-stats" style="font-size: 9px; color: #444; margin-top: 4px;">CONNECTING_TO_SATELLITE...</div>
+            <div id="alert-list" style="margin-top: 10px;"></div>
+        </div>
+        <div id="info-box" class="panel" style="display:none">
+            <div class="detail">ID: <span id="info-id">-</span></div>
+            <div class="detail">TYPE: <span id="info-type">-</span></div>
+            <div class="detail">LINE: <span id="info-line">-</span></div>
+            <div class="detail">SPEED: <span id="info-speed">0 km/h</span></div>
+            <div class="detail">G-FORCE: <span id="info-g">0.00 G</span></div>
+            <button onclick="selectedId = null; document.getElementById('info-box').style.display='none'" style="width:100%; margin-top:10px; background:#111; border:1px solid #333; color:#666; font-size:9px; cursor:pointer;">DROP_LINK</button>
+        </div>
     </div>
     <div id="map"></div>
 
     <script>
-        const map = new maplibregl.Map({
-            container: 'map',
-            style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-            center: [24.94, 60.17],
-            zoom: 10
-        });
-
+        const G_CONST = 9.81;
+        const LIMITS_G = { 'BUSSI': 0.18, 'JUN (HSL)': 0.09, 'JUN (VR)': 0.08 }; // G-voimina
+        const COOLDOWN_MS = 15000; // 15 sekunnin cooldown per ajoneuvo
+        
+        let selectedId = null;
+        let lastUIUpdate = 0;
         const vehicles = new Map();
         const markers = new Map();
 
-        // YHDISTETÄÄN HSL & VR
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+            center: [24.94, 60.17], zoom: 11
+        });
+
         const hsl = mqtt.connect('wss://mqtt.hsl.fi:443/');
         const vr = mqtt.connect('wss://mqtt.digitraffic.fi:443/mqtt');
 
-        hsl.on('connect', () => hsl.subscribe('/hfp/v2/journey/ongoing/vp/+/+/+/+/+/+/+/+/+/+/+/#'));
-        vr.on('connect', () => vr.subscribe('train-locations/#'));
+        // VIRHEENKÄSITTELY
+        const setStatus = (msg, err = false) => {
+            const el = document.getElementById('unit-stats');
+            el.innerText = msg;
+            el.className = err ? 'status-err' : '';
+        };
+
+        hsl.on('error', () => setStatus("HSL_NETWORK_FAILURE", true));
+        vr.on('error', () => setStatus("VR_NETWORK_FAILURE", true));
+
+        hsl.on('connect', () => {
+            setStatus("HSL_CONNECTED");
+            hsl.subscribe(['/hfp/v2/journey/ongoing/vp/bus/#', '/hfp/v2/journey/ongoing/vp/train/#']);
+        });
+
+        vr.on('connect', () => {
+            setStatus("VR_CONNECTED");
+            vr.subscribe('train-locations/#');
+        });
 
         function updateVehicle(id, data) {
+            // 2.3 SUODATUS: Ei analysoida paikallaan olevia
+            if (data.speed < 0.5) {
+                if (vehicles.has(id)) vehicles.get(id).speed = 0; 
+                return; 
+            }
+
+            const now = Date.now();
+            const prev = vehicles.get(id);
+            
+            // 1.1 & 1.3 FYSIIKKA JA MUISTI-IMMUTABILITEETTI
+            let rawAcc = 0;
+            if (prev) {
+                const dt = (now - prev.ts) / 1000;
+                if (dt > 0.1) rawAcc = Math.abs((data.speed - prev.speed) / dt);
+            }
+
+            let accHistory = prev?.accHistory ? [...prev.accHistory] : [];
+            accHistory.push(rawAcc);
+            if (accHistory.length > 6) accHistory.shift();
+            
+            const smoothAcc = accHistory.reduce((a, b) => a + b, 0) / accHistory.length;
+            const currentG = smoothAcc / G_CONST;
+
+            // MARKERIT
             if (!markers.has(id)) {
                 const el = document.createElement('div');
-                el.style.color = data.type === 'TRAIN' ? '#ff0' : '#0ff';
-                el.innerHTML = data.type === 'TRAIN' ? '<b>[TRAIN]</b>' : '<b>[BUS]</b>';
-                const marker = new maplibregl.Marker({element: el}).setLngLat([data.lon, data.lat]).addTo(map);
-                markers.set(id, marker);
+                el.className = data.type.includes('JUN') ? 'marker-train' : 'marker-bus';
+                // 1.4 EVENT PROPAGATION FIX
+                el.addEventListener('click', e => {
+                    e.stopPropagation();
+                    selectedId = id;
+                    document.getElementById('info-box').style.display = 'block';
+                });
+                markers.set(id, new maplibregl.Marker({element: el}).setLngLat([data.lon, data.lat]).addTo(map));
             } else {
                 markers.get(id).setLngLat([data.lon, data.lat]);
             }
-            vehicles.set(id, {...data, ts: Date.now()});
-            document.getElementById('stats').innerText = `ACTIVE_UNITS: ${vehicles.size}`;
+
+            // 1.2 HÄLYTYS COOLDOWNILLA
+            const limitG = LIMITS_G[data.type] || 0.15;
+            const lastAlert = prev?.lastAlert || 0;
+
+            if (currentG > limitG && (now - lastAlert > COOLDOWN_MS)) {
+                triggerAlert(data.line, currentG, data.type);
+                data.lastAlert = now;
+            } else {
+                data.lastAlert = lastAlert;
+            }
+
+            vehicles.set(id, {...data, smoothAcc, currentG, accHistory, ts: now});
+
+            // 2.2 OPTIMOITU UI-PÄIVITYS (max 2x sekunnissa)
+            if (now - lastUIUpdate > 500) {
+                updateUI(id, data, currentG);
+                lastUIUpdate = now;
+            }
         }
 
+        function updateUI(id, data, g) {
+            document.getElementById('unit-stats').innerText = `ACTIVE_NODES: ${vehicles.size} // SCANNING...`;
+            if (selectedId === id) {
+                document.getElementById('info-id').innerText = id;
+                document.getElementById('info-type').innerText = data.type;
+                document.getElementById('info-line').innerText = data.line;
+                document.getElementById('info-speed').innerText = (data.speed * 3.6).toFixed(1) + " km/h";
+                document.getElementById('info-g').innerText = g.toFixed(3) + " G";
+            }
+        }
+
+        function triggerAlert(line, g, type) {
+            const list = document.getElementById('alert-list');
+            const entry = document.createElement('div');
+            entry.className = 'alert-entry';
+            entry.innerText = `⚠️ [${type}] L-${line}: G-VIOLATION (${g.toFixed(2)} G)`;
+            list.prepend(entry);
+            if (list.children.length > 4) list.lastChild.remove();
+        }
+
+        // MQTT HANDLERS (Same as before but with try-catch)
         hsl.on('message', (topic, msg) => {
-            const d = JSON.parse(msg.toString()).VP;
-            if (d && d.veh) updateVehicle(d.veh, {lat: d.lat, lon: d.long, type: 'BUS'});
+            try {
+                const d = JSON.parse(msg.toString()).VP;
+                if (d?.veh) updateVehicle(d.veh, {
+                    line: d.desi || "??", lat: d.lat, lon: d.long, speed: d.spd || 0,
+                    type: topic.includes('train') ? 'JUN (HSL)' : 'BUSSI'
+                });
+            } catch(e) {}
         });
 
         vr.on('message', (topic, msg) => {
-            const d = JSON.parse(msg.toString());
-            updateVehicle(d.trainNumber, {lat: d.location.coordinates[1], lon: d.location.coordinates[0], type: 'TRAIN'});
+            try {
+                const d = JSON.parse(msg.toString());
+                if (d?.location) updateVehicle("VR-"+d.trainNumber, {
+                    line: d.trainNumber, lat: d.location.coordinates[1], lon: d.location.coordinates[0],
+                    speed: (d.speed || 0) / 3.6, type: 'JUN (VR)'
+                });
+            } catch(e) {}
         });
 
-        // Poistetaan vanhat 60s jälkeen
+        // CLEANUP
         setInterval(() => {
             const now = Date.now();
             vehicles.forEach((v, id) => {
@@ -73,7 +187,7 @@
                     vehicles.delete(id);
                 }
             });
-        }, 5000);
+        }, 10000);
     </script>
 </body>
 </html>
