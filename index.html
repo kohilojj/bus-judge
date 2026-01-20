@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BUS_JUDGE_ULTIMATE</title>
+    <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; color: #0f0; font-family: monospace; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        #hud { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.9); padding: 20px; 
+               border: 2px solid #0f0; z-index: 10; pointer-events: none; }
+        .blink { animation: b 1s infinite; }
+        @keyframes b { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <h1 class="blink">SYSTEM: JUDGE_OS_v4</h1>
+        <div id="stats">INITIALIZING_SATELLITE_LINK...</div>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+            center: [24.94, 60.17],
+            zoom: 10
+        });
+
+        const vehicles = new Map();
+        const markers = new Map();
+
+        // YHDISTETÄÄN HSL & VR
+        const hsl = mqtt.connect('wss://mqtt.hsl.fi:443/');
+        const vr = mqtt.connect('wss://mqtt.digitraffic.fi:443/mqtt');
+
+        hsl.on('connect', () => hsl.subscribe('/hfp/v2/journey/ongoing/vp/+/+/+/+/+/+/+/+/+/+/+/#'));
+        vr.on('connect', () => vr.subscribe('train-locations/#'));
+
+        function updateVehicle(id, data) {
+            if (!markers.has(id)) {
+                const el = document.createElement('div');
+                el.style.color = data.type === 'TRAIN' ? '#ff0' : '#0ff';
+                el.innerHTML = data.type === 'TRAIN' ? '<b>[TRAIN]</b>' : '<b>[BUS]</b>';
+                const marker = new maplibregl.Marker({element: el}).setLngLat([data.lon, data.lat]).addTo(map);
+                markers.set(id, marker);
+            } else {
+                markers.get(id).setLngLat([data.lon, data.lat]);
+            }
+            vehicles.set(id, {...data, ts: Date.now()});
+            document.getElementById('stats').innerText = `ACTIVE_UNITS: ${vehicles.size}`;
+        }
+
+        hsl.on('message', (topic, msg) => {
+            const d = JSON.parse(msg.toString()).VP;
+            if (d && d.veh) updateVehicle(d.veh, {lat: d.lat, lon: d.long, type: 'BUS'});
+        });
+
+        vr.on('message', (topic, msg) => {
+            const d = JSON.parse(msg.toString());
+            updateVehicle(d.trainNumber, {lat: d.location.coordinates[1], lon: d.location.coordinates[0], type: 'TRAIN'});
+        });
+
+        // Poistetaan vanhat 60s jälkeen
+        setInterval(() => {
+            const now = Date.now();
+            vehicles.forEach((v, id) => {
+                if (now - v.ts > 60000) {
+                    markers.get(id).remove();
+                    markers.delete(id);
+                    vehicles.delete(id);
+                }
+            });
+        }, 5000);
+    </script>
+</body>
+</html>
