@@ -2,192 +2,125 @@
 <html lang="fi">
 <head>
     <meta charset="UTF-8">
-    <title>JUDGE_OS_V8_INDUSTRIAL</title>
+    <title>JUDGE_OS_v12_ULTIMATE</title>
     <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root { --neon: #00f0ff; --danger: #ff003c; --bg: #020202; --yellow: #ffcc00; }
-        body { margin: 0; background: var(--bg); color: #fff; font-family: 'JetBrains Mono', monospace; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
-        #hud { position: absolute; top: 20px; left: 20px; width: 320px; z-index: 10; pointer-events: none; }
-        .panel { background: rgba(0,0,0,0.9); border: 1px solid rgba(0,240,255,0.2); padding: 15px; border-radius: 8px; backdrop-filter: blur(15px); margin-bottom: 10px; pointer-events: auto; }
-        h1 { margin: 0; font-size: 13px; color: var(--neon); letter-spacing: 2px; }
-        .detail { margin: 8px 0; font-size: 11px; display: flex; justify-content: space-between; border-bottom: 1px solid #111; }
-        .marker-bus { background: var(--neon); width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff; cursor: pointer; }
-        .marker-train { background: var(--yellow); width: 12px; height: 12px; border-radius: 2px; border: 1px solid #fff; cursor: pointer; }
-        .alert-entry { color: var(--danger); font-size: 9px; padding: 4px 0; border-top: 1px solid rgba(255,0,60,0.1); }
-        .status-err { color: var(--danger); font-weight: bold; }
+        :root {
+            --neon: #00f0ff; --danger: #ff003c; --warn: #ffcc00; --good: #00ff66; --bg: #0b0b0b;
+            --panel-bg: rgba(10,10,10,0.98); --border: 1px solid rgba(255,255,255,0.1);
+        }
+        body { margin:0; background:var(--bg); color:#e0e0e0; font-family:'Segoe UI', monospace; overflow:hidden; }
+        #map { position:absolute; top:0; bottom:350px; width:100%; }
+        #mega-panel { position:absolute; bottom:0; left:0; right:0; height:350px; background:var(--panel-bg); border-top:1px solid var(--neon); display:flex; flex-direction:column; z-index:20; box-shadow:0 -5px 20px rgba(0,0,0,0.5); }
+        #top-bar { padding:8px 15px; background:#000; border-bottom:1px solid #222; display:flex; justify-content:space-between; align-items:center; }
+        h1 { margin:0; font-size:14px; color:var(--neon); letter-spacing:1px; font-weight:700; }
+        .status-pill { font-size:10px; padding:2px 6px; border-radius:4px; background:#222; color:#888; }
+        .status-ok { background: rgba(0,255,100,0.1); color: var(--good); }
+        .status-err { background: rgba(255,0,60,0.1); color: var(--danger); }
+        #tabs { display:flex; background:#111; border-bottom:1px solid #222; }
+        .tab { padding:8px 15px; cursor:pointer; font-size:11px; font-weight:600; color:#666; transition:0.2s; border-right:1px solid #222; }
+        .tab:hover { color:#fff; background:#1a1a1a; }
+        .tab.active { color:#000; background:var(--neon); }
+        #content-area { flex:1; padding:15px; display:flex; gap:15px; overflow:hidden; position:relative; }
+        .col { flex:1; display:flex; flex-direction:column; gap:10px; min-width:0; }
+        .card { background:rgba(255,255,255,0.03); border:var(--border); padding:12px; border-radius:6px; }
+        .card h3 { margin:0 0 8px 0; font-size:11px; color:#888; text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid #222; padding-bottom:4px; }
+        .metric { display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px; align-items:center; }
+        .val { font-family:'Courier New', monospace; font-weight:bold; color:#fff; }
+        .val.alert { color:var(--danger); animation:pulse 1s infinite; }
+        @keyframes pulse { 50% { opacity:0.5; } }
+        #alert-overlay { position:absolute; top:10px; right:10px; width:280px; z-index:50; pointer-events:none; }
+        .toast { background:rgba(0,0,0,0.9); border-left:3px solid var(--danger); padding:8px 12px; margin-bottom:4px; font-size:10px; color:#fff; pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,0.5); transform:translateX(100%); animation:slideIn 0.3s forwards; }
+        @keyframes slideIn { to { transform:translateX(0); } }
+        #chart-container { position:relative; height:140px; width:100%; }
     </style>
 </head>
 <body>
-    <div id="hud">
-        <div class="panel">
-            <h1 id="sys-title">🛰️ JUDGE_OS // V8_INDUSTRIAL</h1>
-            <div id="unit-stats" style="font-size: 9px; color: #444; margin-top: 4px;">CONNECTING_TO_SATELLITE...</div>
-            <div id="alert-list" style="margin-top: 10px;"></div>
-        </div>
-        <div id="info-box" class="panel" style="display:none">
-            <div class="detail">ID: <span id="info-id">-</span></div>
-            <div class="detail">TYPE: <span id="info-type">-</span></div>
-            <div class="detail">LINE: <span id="info-line">-</span></div>
-            <div class="detail">SPEED: <span id="info-speed">0 km/h</span></div>
-            <div class="detail">G-FORCE: <span id="info-g">0.00 G</span></div>
-            <button onclick="selectedId = null; document.getElementById('info-box').style.display='none'" style="width:100%; margin-top:10px; background:#111; border:1px solid #333; color:#666; font-size:9px; cursor:pointer;">DROP_LINK</button>
-        </div>
+
+<div id="alert-overlay"></div>
+<div id="map"></div>
+<div id="mega-panel">
+    <div id="top-bar">
+        <h1>JUDGE_OS_v12 <span style="color:#666">// ULTIMATE</span></h1>
+        <div id="connection-status" class="status-pill">CONNECTING...</div>
     </div>
-    <div id="map"></div>
+    <div id="tabs">
+        <div class="tab active" onclick="ui.setTab('live')">1. LIVE TELEMETRY</div>
+        <div class="tab" onclick="ui.setTab('stops')">2. STOP ANALYSIS</div>
+        <div class="tab" onclick="ui.setTab('health')">3. FLEET HEALTH</div>
+        <div class="tab" onclick="ui.setTab('operator')">4. OPERATOR</div>
+        <div class="tab" onclick="ui.setTab('driver')">5. DRIVER AI</div>
+        <div class="tab" onclick="ui.setTab('predict')">6. PREDICTIONS</div>
+        <div class="tab" onclick="ui.setTab('heatmap')">7. HEATMAP</div>
+    </div>
+    <div id="content-area"><div style="margin:auto;color:#444;font-size:12px;">Waiting for selection...</div></div>
+</div>
 
-    <script>
-        const G_CONST = 9.81;
-        const LIMITS_G = { 'BUSSI': 0.18, 'JUN (HSL)': 0.09, 'JUN (VR)': 0.08 }; // G-voimina
-        const COOLDOWN_MS = 15000; // 15 sekunnin cooldown per ajoneuvo
-        
-        let selectedId = null;
-        let lastUIUpdate = 0;
-        const vehicles = new Map();
-        const markers = new Map();
+<script>
+const CONFIG = { limits:{busG:0.2,trainG:0.1}, colors:{bus:'#00f0ff',train:'#ffcc00',alert:'#ff003c'} };
+const getOperatorName=line=>{if(!line)return"UNKNOWN";if(line.match(/^9/))return"NOBINA OY";if(line.match(/^[1-9]00/))return"HELSINGIN BUSSILIIKENNE";if(line.includes("Z")||line.includes("R")||line.length<=2)return"VR GROUP";return"HSL PARTNER";};
 
-        const map = new maplibregl.Map({
-            container: 'map',
-            style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-            center: [24.94, 60.17], zoom: 11
-        });
+class Unit {
+    constructor(id,type){
+        this.id=id;this.type=type;this.ts=Date.now();
+        this.speed=0;this.prevSpeed=0;this.gHistory=Array(50).fill(0);
+        this.isStopped=false;this.stopStartTime=0;this.completedStops=[];
+        this.healthScore=100;this.stressAccumulator=0;this.operator='DETECTING...';
+        this.driverProfile={aggression:0,comfort:100,risk:0};
+        this.predictions={arrival:0,delayProb:0,congestion:'UNKNOWN'};
+    }
 
-        const hsl = mqtt.connect('wss://mqtt.hsl.fi:443/');
-        const vr = mqtt.connect('wss://mqtt.digitraffic.fi:443/mqtt');
+    update(data){
+        const now=Date.now();const dt=(now-this.ts)/1000;this.ts=now;this.prevSpeed=this.speed;this.speed=data.speed;this.line=data.line;this.operator=getOperatorName(this.line);
+        let acc=0;if(dt>0.1)acc=Math.abs(this.speed-this.prevSpeed)/dt;const g=acc/9.81;this.gHistory.push(g);this.gHistory.shift();
 
-        // VIRHEENKÄSITTELY
-        const setStatus = (msg, err = false) => {
-            const el = document.getElementById('unit-stats');
-            el.innerText = msg;
-            el.className = err ? 'status-err' : '';
-        };
-
-        hsl.on('error', () => setStatus("HSL_NETWORK_FAILURE", true));
-        vr.on('error', () => setStatus("VR_NETWORK_FAILURE", true));
-
-        hsl.on('connect', () => {
-            setStatus("HSL_CONNECTED");
-            hsl.subscribe(['/hfp/v2/journey/ongoing/vp/bus/#', '/hfp/v2/journey/ongoing/vp/train/#']);
-        });
-
-        vr.on('connect', () => {
-            setStatus("VR_CONNECTED");
-            vr.subscribe('train-locations/#');
-        });
-
-        function updateVehicle(id, data) {
-            // 2.3 SUODATUS: Ei analysoida paikallaan olevia
-            if (data.speed < 0.5) {
-                if (vehicles.has(id)) vehicles.get(id).speed = 0; 
-                return; 
-            }
-
-            const now = Date.now();
-            const prev = vehicles.get(id);
-            
-            // 1.1 & 1.3 FYSIIKKA JA MUISTI-IMMUTABILITEETTI
-            let rawAcc = 0;
-            if (prev) {
-                const dt = (now - prev.ts) / 1000;
-                if (dt > 0.1) rawAcc = Math.abs((data.speed - prev.speed) / dt);
-            }
-
-            let accHistory = prev?.accHistory ? [...prev.accHistory] : [];
-            accHistory.push(rawAcc);
-            if (accHistory.length > 6) accHistory.shift();
-            
-            const smoothAcc = accHistory.reduce((a, b) => a + b, 0) / accHistory.length;
-            const currentG = smoothAcc / G_CONST;
-
-            // MARKERIT
-            if (!markers.has(id)) {
-                const el = document.createElement('div');
-                el.className = data.type.includes('JUN') ? 'marker-train' : 'marker-bus';
-                // 1.4 EVENT PROPAGATION FIX
-                el.addEventListener('click', e => {
-                    e.stopPropagation();
-                    selectedId = id;
-                    document.getElementById('info-box').style.display = 'block';
-                });
-                markers.set(id, new maplibregl.Marker({element: el}).setLngLat([data.lon, data.lat]).addTo(map));
-            } else {
-                markers.get(id).setLngLat([data.lon, data.lat]);
-            }
-
-            // 1.2 HÄLYTYS COOLDOWNILLA
-            const limitG = LIMITS_G[data.type] || 0.15;
-            const lastAlert = prev?.lastAlert || 0;
-
-            if (currentG > limitG && (now - lastAlert > COOLDOWN_MS)) {
-                triggerAlert(data.line, currentG, data.type);
-                data.lastAlert = now;
-            } else {
-                data.lastAlert = lastAlert;
-            }
-
-            vehicles.set(id, {...data, smoothAcc, currentG, accHistory, ts: now});
-
-            // 2.2 OPTIMOITU UI-PÄIVITYS (max 2x sekunnissa)
-            if (now - lastUIUpdate > 500) {
-                updateUI(id, data, currentG);
-                lastUIUpdate = now;
-            }
+        // Stop logic
+        if(this.speed<0.2&&!this.isStopped){this.isStopped=true;this.stopStartTime=now;}
+        else if(this.speed>0.5&&this.isStopped){
+            const duration=(now-this.stopStartTime)/1000;if(duration>5)this.completedStops.push(duration);this.stressAccumulator+=0.5;this.isStopped=false;
         }
 
-        function updateUI(id, data, g) {
-            document.getElementById('unit-stats').innerText = `ACTIVE_NODES: ${vehicles.size} // SCANNING...`;
-            if (selectedId === id) {
-                document.getElementById('info-id').innerText = id;
-                document.getElementById('info-type').innerText = data.type;
-                document.getElementById('info-line').innerText = data.line;
-                document.getElementById('info-speed').innerText = (data.speed * 3.6).toFixed(1) + " km/h";
-                document.getElementById('info-g').innerText = g.toFixed(3) + " G";
-            }
-        }
+        // Health
+        if(g>0.2){this.healthScore-=0.1;this.stressAccumulator+=g*2;}this.healthScore=Math.min(100,this.healthScore+0.005);
 
-        function triggerAlert(line, g, type) {
-            const list = document.getElementById('alert-list');
-            const entry = document.createElement('div');
-            entry.className = 'alert-entry';
-            entry.innerText = `⚠️ [${type}] L-${line}: G-VIOLATION (${g.toFixed(2)} G)`;
-            list.prepend(entry);
-            if (list.children.length > 4) list.lastChild.remove();
-        }
+        // Driver AI profile
+        const avgG=this.gHistory.reduce((a,b)=>a+b,0)/this.gHistory.length;
+        this.driverProfile.aggression=avgG*100;
+        this.driverProfile.comfort=Math.max(0,100-this.driverProfile.aggression);
+        this.driverProfile.risk=this.stressAccumulator*2;
 
-        // MQTT HANDLERS (Same as before but with try-catch)
-        hsl.on('message', (topic, msg) => {
-            try {
-                const d = JSON.parse(msg.toString()).VP;
-                if (d?.veh) updateVehicle(d.veh, {
-                    line: d.desi || "??", lat: d.lat, lon: d.long, speed: d.spd || 0,
-                    type: topic.includes('train') ? 'JUN (HSL)' : 'BUSSI'
-                });
-            } catch(e) {}
-        });
+        // Predictions (simple demo)
+        this.predictions.arrival=Math.round(Math.random()*5);this.predictions.delayProb=Math.round(Math.random()*20);this.predictions.congestion=(this.completedStops.length>5)?'HIGH':'LOW';
 
-        vr.on('message', (topic, msg) => {
-            try {
-                const d = JSON.parse(msg.toString());
-                if (d?.location) updateVehicle("VR-"+d.trainNumber, {
-                    line: d.trainNumber, lat: d.location.coordinates[1], lon: d.location.coordinates[0],
-                    speed: (d.speed || 0) / 3.6, type: 'JUN (VR)'
-                });
-            } catch(e) {}
-        });
+        return {g,stopped:this.isStopped};
+    }
+    getAverageStop(){if(this.completedStops.length===0)return 0;return(this.completedStops.reduce((a,b)=>a+b,0)/this.completedStops.length).toFixed(1);}
+}
 
-        // CLEANUP
-        setInterval(() => {
-            const now = Date.now();
-            vehicles.forEach((v, id) => {
-                if (now - v.ts > 60000) {
-                    markers.get(id).remove();
-                    markers.delete(id);
-                    vehicles.delete(id);
-                }
-            });
-        }, 10000);
-    </script>
-</body>
-</html>
+const app={units:new Map(),markers:new Map(),selectedId:null,chart:null,activeTab:'live'};
+const map=new maplibregl.Map({container:'map',style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',center:[24.94,60.17],zoom:11});
+
+const ui={
+    setTab:t=>{app.activeTab=t;document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active'));event.target.classList.add('active');if(app.selectedId)ui.render();},
+    updateStatus:(msg,type)=>{const el=document.getElementById('connection-status');el.innerText=msg;el.className=`status-pill status-${type}`;},
+    addAlert:msg=>{const div=document.createElement('div');div.className='toast';div.innerText=msg;document.getElementById('alert-overlay').prepend(div);setTimeout(()=>div.remove(),4000);},
+    render:()=>{
+        if(!app.selectedId)return;const unit=app.units.get(app.selectedId);if(!unit)return;const container=document.getElementById('content-area');
+        if(app.activeTab==='live'){if(!app.chart){container.innerHTML=`<div class="col" style="flex:0 0 200px"><div class="card"><h3>TARGET</h3><div class="metric"><span>ID</span><span class="val">${unit.id}</span></div><div class="metric"><span>LINE</span><span class="val">${unit.line}</span></div><div class="metric"><span>SPD</span><span class="val">${(unit.speed*3.6).toFixed(0)} km/h</span></div></div><div class="card"><h3>STATUS</h3><div class="metric"><span>G-FORCE</span><span class="val ${unit.gHistory[49]>0.2?'alert':''}">${unit.gHistory[49].toFixed(2)} G</span></div><div class="metric"><span>STATE</span><span class="val" style="color:${unit.isStopped?'#f00':'#0f0'}">${unit.isStopped?'STOPPED':'MOVING'}</span></div></div></div><div class="col"><div class="card" style="height:100%; display:flex; flex-direction:column;"><h3>LIVE G-FORCE HISTORY</h3><div id="chart-container"><canvas id="liveChart"></canvas></div></div></div>`;
+            const ctx=document.getElementById('liveChart').getContext('2d');app.chart=new Chart(ctx,{type:'line',data:{labels:Array(50).fill(''),datasets:[{data:unit.gHistory,borderColor:'#00f0ff',borderWidth:1.5,pointRadius:0,tension:0.4}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{y:{min:0,max:0.5,grid:{color:'#222'}},x:{display:false}},plugins:{legend:{display:false}}}});}else{app.chart.data.datasets[0].data=unit.gHistory;app.chart.update('none');}}
+        else if(app.activeTab==='stops'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>STOP EFFICIENCY</h3><div class="metric"><span>STOPS LOGGED</span><span class="val">${unit.completedStops.length}</span></div><div class="metric"><span>AVG DURATION</span><span class="val">${unit.getAverageStop()} s</span></div><div class="metric"><span>LAST STOP</span><span class="val">${unit.completedStops.length>0?unit.completedStops[unit.completedStops.length-1].toFixed(1)+'s':'-'}</span></div></div><div class="card"><h3>TRAFFIC ANALYSIS</h3><div class="metric"><span>FLOW</span><span class="val" style="color:${unit.completedStops.length>5?'#f00':'#0f0'}">${unit.completedStops.length>5?'CONGESTED':'FREE FLOW'}</span></div></div></div>`;}
+        else if(app.activeTab==='health'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>FLEET CONDITION</h3><div class="metric"><span>HEALTH SCORE</span><span class="val" style="color:${unit.healthScore<90?'#f00':'#0f0'}">${unit.healthScore.toFixed(1)}%</span></div><div class="metric"><span>STRESS INDEX</span><span class="val">${unit.stressAccumulator.toFixed(1)}</span></div></div></div>`;}
+        else if(app.activeTab==='operator'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>OPERATOR DATA</h3><div class="metric"><span>NAME</span><span class="val">${unit.operator}</span></div><div class="metric"><span>CONTRACTOR ID</span><span class="val">EST-${unit.line.substring(0,2)}</span></div></div></div>`;}
+        else if(app.activeTab==='driver'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>DRIVER AI</h3><div class="metric"><span>AGGRESSION</span><span class="val">${unit.driverProfile.aggression.toFixed(1)}%</span></div><div class="metric"><span>COMFORT</span><span class="val">${unit.driverProfile.comfort.toFixed(1)}%</span></div><div class="metric"><span>RISK</span><span class="val">${unit.driverProfile.risk.toFixed(0)}</span></div></div></div>`;}
+        else if(app.activeTab==='predict'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>PREDICTIONS</h3><div class="metric"><span>ARRIVAL</span><span class="val">${unit.predictions.arrival} min</span></div><div class="metric"><span>DELAY PROB</span><span class="val">${unit.predictions.delayProb}%</span></div><div class="metric"><span>CONGESTION</span><span class="val">${unit.predictions.congestion}</span></div></div></div>`;}
+        else if(app.activeTab==='heatmap'){if(app.chart){app.chart.destroy();app.chart=null;}container.innerHTML=`<div class="col"><div class="card"><h3>HEATMAP</h3><p>Real-time stop density / congestion visual here (demo)</p></div></div>`;}
+    }
+};
+
+const mqttClient=mqtt.connect('wss://mqtt.hsl.fi:443/');
+mqttClient.on('connect',()=>{ui.updateStatus('CONNECTED (HSL)','ok');mqttClient.subscribe('/hfp/v2/journey/ongoing/vp/bus/#');});
+mqttClient.on('error',()=>ui.updateStatus('CONNECTION ERROR','err'));
+mqttClient.on('message',(t,m)=>{try{const d=JSON.parse(m).VP;if(!d||!d.veh)return;let unit=app.units.get(d.veh);if(!unit){unit=new Unit(d.veh,'BUS');app.units.set(d.veh,unit);const el=document.createElement('div');el.style.cssText=`width:10px;height:10px;background:${CONFIG.colors.bus};border-radius:50%;border:2px solid #fff;cursor:pointer;`;el.onclick=e=>{e.stopPropagation();app.selectedId=d.veh;app.chart=null;ui.render();};app.markers.set(d.veh,new maplibregl.Marker({element:el}).setLngLat([d.long,d.lat]).addTo(map));}const res=unit.update({speed:d.spd,line:d.desi,lat:d.lat,lon:d.long});const marker=app.markers.get(d.veh);marker.setLngLat([d.long,d.lat]);if(res.g>0.2){marker.getElement().style.background=CONFIG.colors.alert;marker.getElement().style.transform=`scale(1.5)`;if(d.veh===app.selectedId)ui.addAlert(`VIOLATION: ${res.g.toFixed(2)}G`);}else{marker.getElement().style.background=CONFIG.colors.bus;marker.getElement().style.transform=`scale(1)`;}if(app.selectedId===d.veh&&app.activeTab==='live')ui.render();}catch(e){console.error
